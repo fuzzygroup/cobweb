@@ -90,6 +90,7 @@ class CobwebCrawler
         begin
           @stats.update_status("Requesting #{url}...")
           content = @cobweb.get(url) unless url.nil?
+          debugger
           if content.nil?
             @queue_counter = @queue_counter - 1 #@redis.scard("queued").to_i
           else
