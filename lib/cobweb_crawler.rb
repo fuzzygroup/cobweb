@@ -79,6 +79,81 @@ class CobwebCrawler
     end
     @stats
   end
+  
+  def is_duplicate_content?(content)
+    #
+    # Approach is as follows:
+    #  * check for duplication by SHA1 calculation at full html page level
+    #  * segment the full html page into just content between body and close body
+    #  * check for duplication by SHA1 calculation at html body content level
+    #  * check for duplication at url level by stripping URL next content like:
+    #      https://www.udemy.com/join/signup-popup/?next=/gift/ebaytips/
+    #    content[:base_url]
+    
+    #require ''
+    #debugger
+    
+    #
+    # Abort duplicate detection unless content[:mime_type] is text/html
+    #
+    return if content[:mime_type] != "text/html"
+
+    #
+    # Check 1 -- full html 
+    #
+    sha1 = Digest::SHA1.hexdigest(content[:body])
+    if @redis.sismember("duplicate_content", sha1) 
+      puts "************************************************************"
+      puts "Got into duplicate content check AT html level and already exists in there so returning true"
+      puts "************************************************************"
+      return true 
+    end
+    
+    #
+    # Check 2 -- content inside body
+    #
+    mechanize_page = Mechanize::Page.new(nil, {'content-type'=>'text/html'}, content[:body], nil, Mechanize.new)
+    mechanize_page.uri = URI.parse(content[:url])    
+    content_inside_body = mechanize_page.parser.css('body').to_html.sub(/<body[^>]*>/i,'').sub(/<\/body>/i,'')
+    sha1_body = Digest::SHA1.hexdigest(content_inside_body)
+    if @redis.sismember("duplicate_content", sha1_body)
+      puts "************************************************************"
+      puts "Got into duplicate content check AT body level and already exists in there so returning true"
+      puts "************************************************************"
+      return true       
+    end
+    
+    #
+    # Check 3 -- strip off fragment content -- 
+    #   really needs to be configurable -- not just hard coded like this
+    #
+    if content[:url] =~ /\?next/ || content[:url] =~ /\?key/
+      parts = URI.parse(content[:url])
+      cleaned_url = "parts.scheme://#{parts.hostname}#{parts.path}"
+      sha1_url = Digest::SHA1.hexdigest(cleaned_url)
+      if @redis.sismember("duplicate_content", sha1_url)
+        puts "************************************************************"
+        puts "Got into duplicate content check AT url level and already exists in there so returning true"
+        puts "************************************************************"
+        return true       
+      end      
+    end
+    
+    #
+    # Didn't pass the checks so adding sha's
+    #
+    puts "************************************************************"
+    puts "Not duplicate content so adding 3 shas and returning false"
+    puts "************************************************************"
+    @redis.sadd("duplicate_content", sha1)
+    @redis.sadd("duplicate_content", sha1_body)
+    @redis.sadd("duplicate_content", sha1_url)
+    return false
+  end
+  
+  #Online Courses - Anytime, Anywhere | Udemy
+  def is_duplicate_title(content)
+  end  
 
   def spawn_thread(&block)
       while @queue_counter>0 && (@options[:crawl_limit].to_i == 0 || @options[:crawl_limit].to_i > @crawl_counter)
@@ -90,8 +165,8 @@ class CobwebCrawler
         begin
           @stats.update_status("Requesting #{url}...")
           content = @cobweb.get(url) unless url.nil?
-          debugger
-          if content.nil?
+          #debugger
+          if content.nil? || is_duplicate_content?(content)
             @queue_counter = @queue_counter - 1 #@redis.scard("queued").to_i
           else
             @stats.update_status("Processing #{url}...")
